@@ -1,0 +1,5 @@
+disabled-scripts:
+  - small-test.sk
+
+database:
+  file: storage.db

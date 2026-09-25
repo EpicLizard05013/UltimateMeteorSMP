@@ -1,0 +1,80 @@
+name: UltimateMeteorSMP
+version: '${version}'
+main: com.meteorsmp.core.PluginMain
+api-version: '1.21'
+author: EpicLizard0
+softdepend: [Vault, Skript, SmartSpawner, PlaceholderAPI, LuckPerms]
+commands:
+  migratevariables:
+    description: Runs the one-time Skript variables.txt -> SQLite import
+    permission: meteorsmp.admin
+  sell:
+    description: Opens the item-sell GUI
+  shop:
+    description: Opens the main shop menu
+  openshopcategory:
+    description: Internal - opens a shop category
+  refreshshopgui:
+    description: Internal - redraws the main shop GUI
+  refreshshopcatgui:
+    description: Internal - redraws a shop category GUI
+  openconfirmshop:
+    description: Internal - opens the buy-quantity confirm GUI
+  addshopcat:
+    description: Create a shop category using your held item as its icon
+    permission: op
+  addshopitem:
+    description: Add your held item to a shop category
+    permission: op
+  delshopcat:
+    description: Delete a shop category and its items
+    permission: op
+  clearshopcat:
+    description: Remove all items from a shop category
+    permission: op
+  shoplist:
+    description: Lists shop admin commands
+    permission: op
+  bal:
+    description: Check your or another player's balance
+    aliases: [balance]
+  pay:
+    description: Pay another player
+  add-to-balance:
+    description: Add money to a player's balance
+    permission: op
+  changebal:
+    description: Set a player's balance
+    permission: op
+  changebalall:
+    description: Bulk-change balances above a threshold
+    permission: op
+  confirm:
+    description: Confirm a pending admin economy action
+    permission: op
+  sellmulti:
+    description: Check your global sell multiplier
+    aliases: [smulti]
+  resetmulti:
+    description: Reset a player's sell multiplier progress
+    permission: op
+  sellmultiresetall:
+    description: Reset everyone's sell multiplier progress
+    aliases: [resetmultiall]
+    permission: op
+    rankcheck: {}
+  god: { permission: meteorsmp.staff }
+  vanish: { aliases: [v], permission: meteorsmp.staff }
+  survi: { aliases: [gms], permission: meteorsmp.staff }
+  spect: { aliases: [gmsp], permission: meteorsmp.staff }
+  warn: { permission: meteorsmp.staff }
+  warnhistory: { permission: meteorsmp.staff }
+  removewarn: { permission: meteorsmp.staff }
+  mute: { permission: meteorsmp.staff }
+  unmute: { permission: meteorsmp.staff }
+  kick: { permission: meteorsmp.staff }
+  sus: { permission: meteorsmp.staff }
+  staffchat: { aliases: [sc], permission: meteorsmp.staff }
+  modlist: {}
+  testmodlist: {}
+  
