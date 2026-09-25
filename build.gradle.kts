@@ -20,8 +20,10 @@ repositories {
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
-    compileOnly("com.github.MilkBowl:VaultAPI:1.7")
+    compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
+    compileOnly("com.github.MilkBowl:VaultAPI:2.0") {
+        exclude(group = "org.bukkit", module = "bukkit")
+    }
     compileOnly("com.github.SkriptLang:Skript:2.16.2")
     implementation("org.xerial:sqlite-jdbc:3.47.1.0")
     implementation("com.zaxxer:HikariCP:6.2.1")
