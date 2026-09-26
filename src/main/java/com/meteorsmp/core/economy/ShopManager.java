@@ -5,6 +5,7 @@ import com.meteorsmp.core.database.DatabaseManager;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -13,6 +14,9 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -20,10 +24,23 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
+/**
+ * Port of shop.sk's player-facing purchase flow, category system (using
+ * the same small-caps unicode category names as the original), and the
+ * admin setup commands. Category "names" are literally the display text
+ * (matching how shop.sk stores them) — findCategory() normalizes small
+ * caps back to plain ascii for matching, exactly like shopFindCategory().
+ *
+ * NEW vs the original (explicitly requested, not in shop.sk): categories
+ * can be flagged coming-soon (blocks opening, shows a message instead),
+ * and every buy price now automatically derives a capped sell price via
+ * SpawnerSellManager so an item can never be resold for more than it
+ * cost — see addItem() and SpawnerSellManager's sell-price clamp.
+ */
 public class ShopManager implements Listener {
 
-    private static final String MAIN_TITLE = "§8§rShop";
-    private static final String CAT_PREFIX = "§8§rShop - ";
+    private static final String MAIN_TITLE = "§8§rѕʜᴏᴘ";
+    private static final String CAT_PREFIX = "§8§rѕʜᴏᴘ - ";
     private static final String CONFIRM_PREFIX = "Buying ";
 
     private final PluginMain plugin;
@@ -43,7 +60,7 @@ public class ShopManager implements Listener {
         this.economy = economy;
     }
 
-    private record ShopCategory(ItemStack icon, boolean pagination, Integer catSlot) {}
+    private record ShopCategory(ItemStack icon, boolean pagination, Integer catSlot, boolean comingSoon) {}
     private record ShopItem(ItemStack item, double price, String currency, Integer slot) {}
     private static class ConfirmState {
         String category; int index; ItemStack item; int qty = 1;
@@ -51,7 +68,41 @@ public class ShopManager implements Listener {
     }
 
     // ------------------------------------------------------------------
-    // Loading
+    // Small-caps handling (matches shopNormalizeCat / shopGetCategoryColor)
+    // ------------------------------------------------------------------
+
+    private static final Map<Character, Character> SMALLCAPS_TO_ASCII = Map.ofEntries(
+            Map.entry('ᴀ', 'a'), Map.entry('ʙ', 'b'), Map.entry('ᴄ', 'c'), Map.entry('ᴅ', 'd'),
+            Map.entry('ᴇ', 'e'), Map.entry('ꜰ', 'f'), Map.entry('ɢ', 'g'), Map.entry('ʜ', 'h'),
+            Map.entry('ɪ', 'i'), Map.entry('ᴊ', 'j'), Map.entry('ᴋ', 'k'), Map.entry('ʟ', 'l'),
+            Map.entry('ᴍ', 'm'), Map.entry('ɴ', 'n'), Map.entry('ᴏ', 'o'), Map.entry('ᴘ', 'p'),
+            Map.entry('ǫ', 'q'), Map.entry('ʀ', 'r'), Map.entry('ѕ', 's'), Map.entry('ᴛ', 't'),
+            Map.entry('ᴜ', 'u'), Map.entry('ᴠ', 'v'), Map.entry('ᴡ', 'w'), Map.entry('ʏ', 'y'),
+            Map.entry('ᴢ', 'z')
+    );
+
+    private String normalizeCat(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (char ch : s.toLowerCase(Locale.ROOT).toCharArray()) {
+            sb.append(SMALLCAPS_TO_ASCII.getOrDefault(ch, ch));
+        }
+        return sb.toString();
+    }
+
+    private String getCategoryColor(String cat) {
+        String n = normalizeCat(cat);
+        if (n.contains("end")) return "§f";
+        if (n.contains("nether")) return "§c";
+        if (n.contains("gear")) return "§e";
+        if (n.contains("food")) return "§a";
+        if (n.contains("shard")) return "§5";
+        if (n.contains("redstone")) return "§c";
+        if (n.contains("armory")) return "§3";
+        return "§f";
+    }
+
+    // ------------------------------------------------------------------
+    // Loading + seeding
     // ------------------------------------------------------------------
 
     public void loadAll() {
@@ -66,7 +117,7 @@ public class ShopManager implements Listener {
                     int catSlotVal = rs.getInt("cat_slot");
                     Integer catSlot = rs.wasNull() ? null : catSlotVal;
                     categories.put(rs.getString("name"),
-                            new ShopCategory(icon, rs.getInt("pagination") != 0, catSlot));
+                            new ShopCategory(icon, rs.getInt("pagination") != 0, catSlot, rs.getInt("coming_soon") != 0));
                 }
             }
             try (PreparedStatement ps = c.prepareStatement("SELECT * FROM shop_items");
@@ -88,29 +139,76 @@ public class ShopManager implements Listener {
                 itemsByCategory.values().stream().mapToInt(Map::size).sum() + " items.");
     }
 
+    /** Seeds shop-defaults.yml, but only when no categories exist yet — never overwrites. */
+    public void seedDefaultsIfEmpty() {
+        if (!categories.isEmpty()) return;
+
+        InputStream in = plugin.getResource("shop-defaults.yml");
+        if (in == null) {
+            plugin.getLogger().warning("shop-defaults.yml not found in jar resources — skipping shop seed.");
+            return;
+        }
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(new InputStreamReader(in, StandardCharsets.UTF_8));
+        List<Map<?, ?>> catList = yaml.getMapList("categories");
+        int seededCats = 0, seededItems = 0;
+
+        for (Map<?, ?> catMap : catList) {
+            String key = String.valueOf(catMap.get("key"));
+            String iconName = String.valueOf(catMap.get("icon"));
+            boolean comingSoon = Boolean.TRUE.equals(catMap.get("coming-soon"));
+            Material iconMat;
+            try { iconMat = Material.valueOf(iconName); } catch (IllegalArgumentException e) { iconMat = Material.CHEST; }
+
+            ItemStack icon = new ItemStack(iconMat);
+            categories.put(key, new ShopCategory(icon, true, null, comingSoon));
+            persistCategory(key, icon, true, null, comingSoon);
+            seededCats++;
+
+            Object itemsObj = catMap.get("items");
+            if (itemsObj instanceof List<?> itemList) {
+                int index = 1;
+                for (Object itemObj : itemList) {
+                    if (!(itemObj instanceof Map<?, ?> itemDef)) continue;
+                    String matName = String.valueOf(itemDef.get("material"));
+                    double price = itemDef.get("price") instanceof Number n ? n.doubleValue() : 0;
+                    Material mat;
+                    try { mat = Material.valueOf(matName); } catch (IllegalArgumentException e) {
+                        plugin.getLogger().warning("shop-defaults.yml: unknown material " + matName + " in category " + key);
+                        continue;
+                    }
+                    ItemStack stack = new ItemStack(mat, 1);
+                    itemsByCategory.computeIfAbsent(key, k -> new TreeMap<>())
+                            .put(index, new ShopItem(stack, price, "money", null));
+                    persistItem(key, index, stack, price, "money", null);
+                    linkBuyPriceToSell(mat.getKey().getKey().toLowerCase(Locale.ROOT), price, "money");
+                    index++;
+                    seededItems++;
+                }
+            }
+        }
+        plugin.getLogger().info("Seeded default shop: " + seededCats + " categories, " + seededItems + " items.");
+    }
+
     // ------------------------------------------------------------------
     // Admin setup commands
     // ------------------------------------------------------------------
 
     public void addCategory(Player admin, String name) {
-        if (categories.containsKey(name)) {
+        if (findCategory(name) != null) {
             admin.sendMessage(ChatColor.RED + "[Shop] Category '" + name + "' already exists!");
             return;
         }
         ItemStack tool = admin.getInventory().getItemInMainHand();
         ItemStack icon = (tool.getType() == Material.AIR) ? new ItemStack(Material.CHEST) : tool.clone();
-        categories.put(name, new ShopCategory(icon, true, null));
-        persistCategory(name, icon, true, null);
+        categories.put(name, new ShopCategory(icon, true, null, false));
+        persistCategory(name, icon, true, null, false);
         admin.sendMessage(ChatColor.GREEN + "[Shop] Created category '" + name + "' with " +
                 (tool.getType() == Material.AIR ? "a default chest icon" : "your held item as the icon") + "!");
     }
 
     public void deleteCategory(Player admin, String name) {
         String cat = findCategory(name);
-        if (cat == null) {
-            admin.sendMessage(ChatColor.RED + "[Shop] Category not found!");
-            return;
-        }
+        if (cat == null) { admin.sendMessage(ChatColor.RED + "[Shop] Category not found!"); return; }
         categories.remove(cat);
         itemsByCategory.remove(cat);
         try (Connection c = db.getRawConnection()) {
@@ -128,10 +226,7 @@ public class ShopManager implements Listener {
 
     public void clearCategory(Player admin, String name) {
         String cat = findCategory(name);
-        if (cat == null) {
-            admin.sendMessage(ChatColor.RED + "[Shop] Category not found!");
-            return;
-        }
+        if (cat == null) { admin.sendMessage(ChatColor.RED + "[Shop] Category not found!"); return; }
         itemsByCategory.remove(cat);
         try (Connection c = db.getRawConnection();
              PreparedStatement ps = c.prepareStatement("DELETE FROM shop_items WHERE category = ?")) {
@@ -146,8 +241,8 @@ public class ShopManager implements Listener {
         String cat = findCategory(catArg);
         if (cat == null) {
             cat = catArg;
-            categories.put(cat, new ShopCategory(new ItemStack(Material.CHEST), true, null));
-            persistCategory(cat, new ItemStack(Material.CHEST), true, null);
+            categories.put(cat, new ShopCategory(new ItemStack(Material.CHEST), true, null, false));
+            persistCategory(cat, new ItemStack(Material.CHEST), true, null, false);
             admin.sendMessage(ChatColor.GREEN + "[Shop] Created new category '" + cat + "'!");
         }
 
@@ -160,6 +255,7 @@ public class ShopManager implements Listener {
         double price;
         String currency;
         if (priceArg == null || priceArg.equalsIgnoreCase("auto")) {
+            // Faithful to shop.sk: base $395 + $250 fee, rounded to nearest $50 = always $650.
             double basePrice = 395;
             double rawCalc = basePrice + 250;
             price = Math.round(rawCalc / 50.0) * 50;
@@ -183,6 +279,7 @@ public class ShopManager implements Listener {
         toStore.setAmount(1);
         items.put(index, new ShopItem(toStore, price, currency, null));
         persistItem(cat, index, toStore, price, currency, null);
+        linkBuyPriceToSell(toStore.getType().getKey().getKey().toLowerCase(Locale.ROOT), price, currency);
 
         ItemStack remaining = tool.clone();
         remaining.setAmount(Math.max(0, remaining.getAmount() - 1));
@@ -192,16 +289,49 @@ public class ShopManager implements Listener {
                 formatNumber(price) + " (" + currency + ")!");
     }
 
-    private void persistCategory(String name, ItemStack icon, boolean pagination, Integer catSlot) {
+    /** NEW safety feature (not in the original script): every buy price automatically
+     * derives a capped sell price so an item can never be resold above cost. */
+    private void linkBuyPriceToSell(String itemId, double buyPrice, String currency) {
+        if (!"money".equals(currency)) return; // shards aren't comparable to $ worth prices
         try (Connection c = db.getRawConnection();
              PreparedStatement ps = c.prepareStatement("""
-                 INSERT INTO shop_categories (name, icon, pagination, cat_slot) VALUES (?, ?, ?, ?)
-                 ON CONFLICT(name) DO UPDATE SET icon = excluded.icon, pagination = excluded.pagination, cat_slot = excluded.cat_slot
+                 INSERT INTO shop_buy_prices (item_id, buy_price, currency) VALUES (?, ?, ?)
+                 ON CONFLICT(item_id) DO UPDATE SET buy_price = MIN(buy_price, excluded.buy_price)
+                 """)) {
+            ps.setString(1, itemId);
+            ps.setDouble(2, buyPrice);
+            ps.setString(3, currency);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "linkBuyPriceToSell failed for " + itemId, e);
+        }
+        economy.deriveWorthPriceFromShop(itemId, buyPrice);
+    }
+
+    public void showAdminHelp(Player p) {
+        p.sendMessage(ChatColor.DARK_GRAY + "" + ChatColor.STRIKETHROUGH + "----------------------------------------");
+        p.sendMessage(ChatColor.YELLOW + "" + ChatColor.BOLD + "Shop Commands List:");
+        p.sendMessage(ChatColor.GREEN + "/shop " + ChatColor.GRAY + "- Open the main shop menu");
+        p.sendMessage(ChatColor.RED + "/addshopcat <name> " + ChatColor.GRAY + "- Create a category (uses held item as icon)");
+        p.sendMessage(ChatColor.RED + "/delshopcat <name> " + ChatColor.GRAY + "- Delete a category and its items");
+        p.sendMessage(ChatColor.RED + "/clearshopcat <name> " + ChatColor.GRAY + "- Remove all items from a category");
+        p.sendMessage(ChatColor.RED + "/addshopitem <cat> [price|auto] [money|shards] " + ChatColor.GRAY +
+                "- Add held item (omitting price auto-calculates to $650)");
+        p.sendMessage(ChatColor.DARK_GRAY + "" + ChatColor.STRIKETHROUGH + "----------------------------------------");
+    }
+
+    private void persistCategory(String name, ItemStack icon, boolean pagination, Integer catSlot, boolean comingSoon) {
+        try (Connection c = db.getRawConnection();
+             PreparedStatement ps = c.prepareStatement("""
+                 INSERT INTO shop_categories (name, icon, pagination, cat_slot, coming_soon) VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(name) DO UPDATE SET icon = excluded.icon, pagination = excluded.pagination,
+                     cat_slot = excluded.cat_slot, coming_soon = excluded.coming_soon
                  """)) {
             ps.setString(1, name);
             ps.setBytes(2, icon.serializeAsBytes());
             ps.setInt(3, pagination ? 1 : 0);
             if (catSlot != null) ps.setInt(4, catSlot); else ps.setNull(4, java.sql.Types.INTEGER);
+            ps.setInt(5, comingSoon ? 1 : 0);
             ps.executeUpdate();
         } catch (Exception e) {
             plugin.getLogger().log(Level.WARNING, "persistCategory failed", e);
@@ -228,8 +358,9 @@ public class ShopManager implements Listener {
     }
 
     private String findCategory(String input) {
+        String target = normalizeCat(input);
         for (String cat : categories.keySet()) {
-            if (cat.equalsIgnoreCase(input)) return cat;
+            if (normalizeCat(cat).equals(target)) return cat;
         }
         return null;
     }
@@ -276,8 +407,11 @@ public class ShopManager implements Listener {
             ShopCategory sc = categories.get(cat);
             ItemStack icon = sc.icon().clone();
             ItemMeta meta = icon.getItemMeta();
-            meta.setDisplayName(ChatColor.WHITE + "" + ChatColor.BOLD + cat);
-            meta.setLore(List.of(ChatColor.GRAY + "Click to browse this category", ChatColor.BLACK + "CATNAME:" + cat));
+            meta.setDisplayName(getCategoryColor(cat) + ChatColor.BOLD + cat);
+            List<String> lore = new ArrayList<>();
+            lore.add(sc.comingSoon() ? ChatColor.LIGHT_PURPLE + "Coming soon!" : ChatColor.GRAY + "Click to browse this category");
+            lore.add(ChatColor.BLACK + "CATNAME:" + cat);
+            meta.setLore(lore);
             icon.setItemMeta(meta);
 
             int slot = (sc.catSlot() != null && sc.catSlot() >= 0 && sc.catSlot() <= 26) ? sc.catSlot() : currentCount;
@@ -292,14 +426,20 @@ public class ShopManager implements Listener {
             player.sendMessage(ChatColor.RED + "[Shop] Error: category '" + catArg + "' was not found!");
             return;
         }
+        ShopCategory sc = categories.get(cat);
+        if (sc.comingSoon()) {
+            player.sendMessage(getCategoryColor(cat) + "" + ChatColor.BOLD + cat + ChatColor.LIGHT_PURPLE + " is coming soon!");
+            return;
+        }
+
         viewingCategory.put(player.getUniqueId(), cat);
         itemPage.put(player.getUniqueId(), 1);
 
-        boolean pagination = categories.get(cat).pagination();
+        boolean pagination = sc.pagination();
         int maxItems = itemsByCategory.getOrDefault(cat, Map.of()).size();
         int maxPage = pagination ? Math.max(1, (int) Math.ceil(maxItems / 9.0)) : 1;
 
-        String title = CAT_PREFIX + cat + (pagination ? " (1/" + maxPage + ")" : "");
+        String title = CAT_PREFIX + getCategoryColor(cat) + cat + (pagination ? " §8(1/" + maxPage + ")" : "");
         Inventory gui = Bukkit.createInventory(null, 27, title);
         player.openInventory(gui);
         refreshCategoryGui(player);
@@ -583,7 +723,7 @@ public class ShopManager implements Listener {
     }
 
     private void reopenCategoryTitle(Player player, String cat, int page, int maxPage) {
-        String title = CAT_PREFIX + cat + " (" + page + "/" + maxPage + ")";
+        String title = CAT_PREFIX + getCategoryColor(cat) + cat + " §8(" + page + "/" + maxPage + ")";
         Inventory gui = Bukkit.createInventory(null, 27, title);
         player.openInventory(gui);
         refreshCategoryGui(player);
