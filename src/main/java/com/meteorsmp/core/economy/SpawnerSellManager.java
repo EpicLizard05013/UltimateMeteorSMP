@@ -368,7 +368,7 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
     @Override public EconomyResponse isBankMember(String name, String playerName) { return unsupported(); }
     @Override public EconomyResponse isBankMember(String name, OfflinePlayer player) { return unsupported(); }
     @Override public List<String> getBanks() { return List.of(); }
-    @Override public EconomyResponse createPlayerAccount(String playerName) { return new EconomyResponse(0, 0, EconomyResponse.ResponseType.SUCCESS, null); }
+    @Override public boolean createPlayerAccount(String playerName) { return true; }
     @Override public boolean createPlayerAccount(String playerName, String worldName) { return true; }
     @Override public boolean createPlayerAccount(OfflinePlayer player) { return true; }
     @Override public boolean createPlayerAccount(OfflinePlayer player, String worldName) { return true; }
