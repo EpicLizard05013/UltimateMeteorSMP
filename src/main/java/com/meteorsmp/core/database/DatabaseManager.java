@@ -1,122 +1,108 @@
 package com.meteorsmp.core.database;
 
+import com.meteorsmp.core.PluginMain;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import com.meteorsmp.core.PluginMain;
 
-import java.io.File;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.logging.Level;
 
 public class DatabaseManager {
-
     private final PluginMain plugin;
     private HikariDataSource dataSource;
 
-    public DatabaseManager(PluginMain plugin) {
-        this.plugin = plugin;
-    }
+    public DatabaseManager(PluginMain plugin) { this.plugin = plugin; }
 
     public void connect() {
-        File dataFolder = plugin.getDataFolder();
-        if (!dataFolder.exists()) {
-            dataFolder.mkdirs();
-        }
-
-        File dbFile = new File(dataFolder, "database.db");
-
+        plugin.getDataFolder().mkdirs();
+        String dbFile = plugin.getConfig().getString("database.file", "storage.db");
         HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:sqlite:" + plugin.getDataFolder().toPath().resolve(dbFile));
+        config.setMaximumPoolSize(4);
         config.setPoolName("MeteorSMP-SQLite");
-        config.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
-        config.setDriverClassName("org.sqlite.JDBC");
-        config.setMaximumPoolSize(1); // SQLite single connection limit
-
         this.dataSource = new HikariDataSource(config);
-        plugin.getLogger().info("SQLite database connection pool initialized.");
     }
 
-    public void applySchema() {
-        String[] tableQueries = {
-            """
-            CREATE TABLE IF NOT EXISTS shop_categories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                display_name TEXT NOT NULL,
-                icon_material TEXT NOT NULL,
-                slot INTEGER NOT NULL
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS shop_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category_name TEXT NOT NULL,
-                material TEXT NOT NULL,
-                display_name TEXT,
-                buy_price REAL NOT NULL,
-                sell_price REAL NOT NULL,
-                slot INTEGER NOT NULL,
-                FOREIGN KEY(category_name) REFERENCES shop_categories(name) ON DELETE CASCADE
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS mutes (
-                uuid TEXT PRIMARY KEY,
-                reason TEXT,
-                muted_by TEXT,
-                expires_at INTEGER
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS bans (
-                uuid TEXT PRIMARY KEY,
-                reason TEXT,
-                banned_by TEXT,
-                expires_at INTEGER
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS skript_migrated_variables (
-                key_name TEXT PRIMARY KEY,
-                value_data TEXT
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS player_flags (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uuid TEXT NOT NULL,
-                flag_key TEXT NOT NULL,
-                flag_value TEXT
-            );
-            """
-        };
-
-        try (Connection conn = getRawConnection();
-             Statement stmt = conn.createStatement()) {
-            for (String sql : tableQueries) {
-                stmt.executeUpdate(sql);
-            }
-            plugin.getLogger().info("Database tables initialized successfully.");
-        } catch (SQLException e) {
-            plugin.getLogger().log(Level.SEVERE, "Failed to apply database schema", e);
+    public void applySchema() throws SQLException {
+        try (Connection c = dataSource.getConnection(); Statement s = c.createStatement()) {
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS skript_migrated_variables (
+                    var_key      TEXT PRIMARY KEY,
+                    var_type     TEXT NOT NULL,
+                    string_value TEXT,
+                    long_value   INTEGER,
+                    double_value REAL,
+                    uuid_value   TEXT,
+                    blob_value   BLOB
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS balances (
+                    uuid TEXT PRIMARY KEY,
+                    balance REAL NOT NULL DEFAULT 0,
+                    shards INTEGER NOT NULL DEFAULT 0
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS worth_prices (
+                    item_id TEXT PRIMARY KEY,
+                    price REAL NOT NULL,
+                    category TEXT NOT NULL
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS money_made (
+                    uuid TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    total REAL NOT NULL DEFAULT 0,
+                    items_sold INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (uuid, category)
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS shop_categories (
+                    name TEXT PRIMARY KEY,
+                    icon BLOB,
+                    pagination INTEGER NOT NULL DEFAULT 1,
+                    cat_slot INTEGER,
+                    coming_soon INTEGER NOT NULL DEFAULT 0
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS shop_items (
+                    category TEXT NOT NULL,
+                    idx INTEGER NOT NULL,
+                    item BLOB NOT NULL,
+                    price REAL NOT NULL,
+                    currency TEXT NOT NULL DEFAULT 'money',
+                    slot INTEGER,
+                    PRIMARY KEY (category, idx)
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS shop_buy_prices (
+                    item_id TEXT PRIMARY KEY,
+                    buy_price REAL NOT NULL,
+                    currency TEXT NOT NULL
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS staff_flags (
+                    uuid TEXT PRIMARY KEY,
+                    vanished INTEGER NOT NULL DEFAULT 0,
+                    godmode INTEGER NOT NULL DEFAULT 0,
+                    staffchat INTEGER NOT NULL DEFAULT 0
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS mutes (
+                    uuid TEXT PRIMARY KEY,
+                    reason TEXT,
+                    expiry INTEGER
+                )""");
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS warnings (
+                    uuid TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    warned_by TEXT,
+                    ts INTEGER NOT NULL
+                )""");
         }
     }
 
-    public Connection getRawConnection() throws SQLException {
-        if (dataSource == null) {
-            throw new SQLException("HikariDataSource is not initialized. Call connect() first.");
-        }
-        return dataSource.getConnection();
-    }
-
-    public Connection getConnection() throws SQLException {
-        return getRawConnection();
-    }
-
-    public void close() {
-        if (dataSource != null && !dataSource.isClosed()) {
-            dataSource.close();
-        }
-    }
+    public Connection getRawConnection() throws SQLException { return dataSource.getConnection(); }
+    public void close() { if (dataSource != null) dataSource.close(); }
 }
