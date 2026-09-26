@@ -62,7 +62,9 @@ commands:
     description: Reset everyone's sell multiplier progress
     aliases: [resetmultiall]
     permission: op
-    rankcheck: {}
+  rankcheck:
+    description: Check staff rank status
+    permission: meteorsmp.staff
   god: { permission: meteorsmp.staff }
   vanish: { aliases: [v], permission: meteorsmp.staff }
   survi: { aliases: [gms], permission: meteorsmp.staff }
@@ -77,4 +79,3 @@ commands:
   staffchat: { aliases: [sc], permission: meteorsmp.staff }
   modlist: {}
   testmodlist: {}
-  
