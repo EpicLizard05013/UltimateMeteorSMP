@@ -1,85 +1,85 @@
 package com.meteorsmp.core.database;
 
-import com.meteorsmp.core.PluginMain;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.meteorsmp.core.PluginMain;
 
+import java.io.File;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.logging.Level;
 
 public class DatabaseManager {
+
     private final PluginMain plugin;
     private HikariDataSource dataSource;
 
-    public DatabaseManager(PluginMain plugin) { this.plugin = plugin; }
-
-    public void connect() {
-        plugin.getDataFolder().mkdirs();
-        String dbFile = plugin.getConfig().getString("database.file", "storage.db");
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:sqlite:" + plugin.getDataFolder().toPath().resolve(dbFile));
-        config.setMaximumPoolSize(4);
-        config.setPoolName("MeteorSMP-SQLite");
-        this.dataSource = new HikariDataSource(config);
+    public DatabaseManager(PluginMain plugin) {
+        this.plugin = plugin;
     }
 
-    public void applySchema() throws SQLException {
-        try (Connection c = dataSource.getConnection(); Statement s = c.createStatement()) {
-            s.execute("""
-                CREATE TABLE IF NOT EXISTS skript_migrated_variables (
-                    var_key      TEXT PRIMARY KEY,
-                    var_type     TEXT NOT NULL,
-                    string_value TEXT,
-                    long_value   INTEGER,
-                    double_value REAL,
-                    uuid_value   TEXT,
-                    blob_value   BLOB
-                )""");
-            s.execute("""
-                CREATE TABLE IF NOT EXISTS balances (
-                    uuid TEXT PRIMARY KEY,
-                    balance REAL NOT NULL DEFAULT 0,
-                    shards INTEGER NOT NULL DEFAULT 0
-                )""");
-            s.execute("""
-                CREATE TABLE IF NOT EXISTS worth_prices (
-                    item_id TEXT PRIMARY KEY,
-                    price REAL NOT NULL,
-                    category TEXT NOT NULL
-                )""");
-            s.execute("""
-                CREATE TABLE IF NOT EXISTS money_made (
-                    uuid TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    total REAL NOT NULL DEFAULT 0,
-                    items_sold INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (uuid, category)
-                )""");
+    public void initialize() {
+        File dataFolder = plugin.getDataFolder();
+        if (!dataFolder.exists()) {
+            dataFolder.mkdirs();
+        }
 
-            s.execute("""
-    CREATE TABLE IF NOT EXISTS staff_flags (
-        uuid TEXT PRIMARY KEY,
-        vanished INTEGER NOT NULL DEFAULT 0,
-        godmode INTEGER NOT NULL DEFAULT 0,
-        staffchat INTEGER NOT NULL DEFAULT 0
-    )""");
-s.execute("""
-    CREATE TABLE IF NOT EXISTS mutes (
-        uuid TEXT PRIMARY KEY,
-        reason TEXT,
-        expiry INTEGER
-    )""");
-s.execute("""
-    CREATE TABLE IF NOT EXISTS warnings (
-        uuid TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        warned_by TEXT,
-        ts INTEGER NOT NULL
-    )""");
+        File dbFile = new File(dataFolder, "database.db");
+
+        HikariConfig config = new HikariConfig();
+        config.setPoolName("MeteorSMP-SQLite");
+        config.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
+        config.setDriverClassName("org.sqlite.JDBC");
+        config.setMaximumPoolSize(1); // SQLite supports single-writer locking
+
+        this.dataSource = new HikariDataSource(config);
+
+        // Create missing database tables before any manager queries them
+        createTables();
+    }
+
+    private void createTables() {
+        String createCategoriesTable = """
+            CREATE TABLE IF NOT EXISTS shop_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                icon_material TEXT NOT NULL,
+                slot INTEGER NOT NULL
+            );
+        """;
+
+        String createItemsTable = """
+            CREATE TABLE IF NOT EXISTS shop_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_name TEXT NOT NULL,
+                material TEXT NOT NULL,
+                display_name TEXT,
+                buy_price REAL NOT NULL,
+                sell_price REAL NOT NULL,
+                slot INTEGER NOT NULL,
+                FOREIGN KEY(category_name) REFERENCES shop_categories(name) ON DELETE CASCADE
+            );
+        """;
+
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate(createCategoriesTable);
+            stmt.executeUpdate(createItemsTable);
+            plugin.getLogger().info("SQLite database tables verified successfully.");
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to create SQLite tables", e);
         }
     }
 
-    public Connection getRawConnection() throws SQLException { return dataSource.getConnection(); }
-    public void close() { if (dataSource != null) dataSource.close(); }
+    public Connection getConnection() throws SQLException {
+        return dataSource.getConnection();
+    }
+
+    public void close() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            dataSource.close();
+        }
+    }
 }
