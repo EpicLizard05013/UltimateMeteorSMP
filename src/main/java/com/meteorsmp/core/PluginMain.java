@@ -83,6 +83,7 @@ public final class PluginMain extends JavaPlugin {
         // 4. Shop System
         this.shopManager = new ShopManager(this, databaseManager, spawnerSellManager);
         shopManager.loadAll();
+        shopManager.seedDefaultsIfEmpty();
         getServer().getPluginManager().registerEvents(shopManager, this);
 
         registerCommand("shop", (s, c, l, a) -> { if (s instanceof Player p) shopManager.openMainShop(p); return true; });
@@ -95,6 +96,7 @@ public final class PluginMain extends JavaPlugin {
         });
         registerCommand("delshopcat", (s, c, l, a) -> { if (s instanceof Player p && a.length > 0) shopManager.deleteCategory(p, a[0]); return true; });
         registerCommand("clearshopcat", (s, c, l, a) -> { if (s instanceof Player p && a.length > 0) shopManager.clearCategory(p, a[0]); return true; });
+        registerCommand("shoplist", (s, c, l, a) -> { if (s instanceof Player p) shopManager.showAdminHelp(p); return true; });
 
         // 5. Economy Commands
         this.economyCommands = new EconomyCommands(this, databaseManager, spawnerSellManager);
