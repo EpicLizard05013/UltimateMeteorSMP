@@ -53,6 +53,33 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
         }
     }
 
+    public long getShards(UUID uuid) {
+        try (Connection c = db.getRawConnection();
+             PreparedStatement ps = c.prepareStatement("SELECT shards FROM balances WHERE uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong("shards") : 0;
+            }
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "getShards failed for " + uuid, e);
+            return 0;
+        }
+    }
+
+    public void setShards(UUID uuid, long amount) {
+        try (Connection c = db.getRawConnection();
+             PreparedStatement ps = c.prepareStatement("""
+                 INSERT INTO balances (uuid, shards) VALUES (?, ?)
+                 ON CONFLICT(uuid) DO UPDATE SET shards = excluded.shards
+                 """)) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, amount);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "setShards failed for " + uuid, e);
+        }
+    }
+
     public String getSellCategory(String itemId) {
         if (containsAny(itemId, "wheat", "carrot", "potato", "beetroot", "seed", "melon",
                 "pumpkin", "sugar_cane", "kelp", "cocoa", "crop", "mushroom")) return "farming";
@@ -189,9 +216,6 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
                         returnedAny = true;
                     }
                 } else {
-                    // FIX: empty shulker now falls back to its own type price,
-                    // then the generic shulker_box price, matching
-                    // {worth::%_itemstr%} ? {worth::shulker_box} in shopbal.sk.
                     Double shulkerPrice = worthPrices.get(id);
                     if (shulkerPrice == null) shulkerPrice = worthPrices.get("shulker_box");
 
@@ -377,7 +401,7 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
         return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Bank accounts not supported");
     }
 
-        public void setBalanceDirect(UUID uuid, double amount) { persistBalance(uuid, amount); }
+    public void setBalanceDirect(UUID uuid, double amount) { persistBalance(uuid, amount); }
 
     public int countBalancesAbove(double threshold) {
         try (Connection c = db.getRawConnection();
@@ -396,7 +420,7 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
             ps.setDouble(1, newAmount);
             ps.setDouble(2, threshold);
             int count = ps.executeUpdate();
-            balanceCache.clear(); // simplest correct option: cache is now stale for everyone touched
+            balanceCache.clear();
             return count;
         } catch (Exception e) {
             plugin.getLogger().log(Level.WARNING, "bulkSetBalancesAbove failed", e);
@@ -423,5 +447,4 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
     }
 
     public String formatBalPublic(double n) { return formatBal(n); }
-    
 }
