@@ -19,7 +19,7 @@ public class DatabaseManager {
         this.plugin = plugin;
     }
 
-    public void initialize() {
+    public void connect() {
         File dataFolder = plugin.getDataFolder();
         if (!dataFolder.exists()) {
             dataFolder.mkdirs();
@@ -31,15 +31,13 @@ public class DatabaseManager {
         config.setPoolName("MeteorSMP-SQLite");
         config.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
         config.setDriverClassName("org.sqlite.JDBC");
-        config.setMaximumPoolSize(1); // SQLite supports single-writer locking
+        config.setMaximumPoolSize(1); // Single connection pool required for SQLite
 
         this.dataSource = new HikariDataSource(config);
-
-        // Create missing database tables before any manager queries them
-        createTables();
+        plugin.getLogger().info("SQLite database connection pool initialized.");
     }
 
-    private void createTables() {
+    public void applySchema() {
         String createCategoriesTable = """
             CREATE TABLE IF NOT EXISTS shop_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,18 +61,28 @@ public class DatabaseManager {
             );
         """;
 
-        try (Connection conn = dataSource.getConnection();
+        try (Connection conn = getRawConnection();
              Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(createCategoriesTable);
             stmt.executeUpdate(createItemsTable);
-            plugin.getLogger().info("SQLite database tables verified successfully.");
+            plugin.getLogger().info("Database schema verified and applied.");
         } catch (SQLException e) {
-            plugin.getLogger().log(Level.SEVERE, "Failed to create SQLite tables", e);
+            plugin.getLogger().log(Level.SEVERE, "Failed to apply database schema", e);
         }
     }
 
-    public Connection getConnection() throws SQLException {
+    /**
+     * Gets a database connection from HikariCP pool.
+     */
+    public Connection getRawConnection() throws SQLException {
+        if (dataSource == null) {
+            throw new SQLException("HikariDataSource is not initialized. Call connect() first.");
+        }
         return dataSource.getConnection();
+    }
+
+    public Connection getConnection() throws SQLException {
+        return getRawConnection();
     }
 
     public void close() {
