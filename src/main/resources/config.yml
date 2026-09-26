@@ -3,3 +3,6 @@ disabled-scripts:
 
 database:
   file: storage.db
+  
+shop:
+  sell-margin-percent: 15
