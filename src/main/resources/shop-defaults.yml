@@ -1,0 +1,69 @@
+# Seeded ONLY when shop_categories is empty (fresh install / first boot
+# after this update). Safe to edit and re-run — it never overwrites an
+# existing category. Category keys are the actual small-caps unicode text
+# from your shop.sk (shopToSmallCaps), matching your original aesthetic.
+categories:
+  - key: "ᴀʀᴍᴏʀʏ"
+    icon: DIAMOND_SWORD
+    coming-soon: false
+    items: []   # no price list was given for Armory in your shop.sk comments — add via /addshopitem
+  - key: "ᴇɴᴅ"
+    icon: END_STONE
+    coming-soon: false
+    items:
+      - { material: ENDER_CHEST, price: 2500 }
+      - { material: ENDER_PEARL, price: 75 }
+      - { material: END_STONE, price: 8 }
+      - { material: DRAGON_BREATH, price: 1000 }
+      - { material: END_ROD, price: 100 }
+      - { material: CHORUS_FRUIT, price: 100 }
+      - { material: POPPED_CHORUS_FRUIT, price: 150 }
+      - { material: SHULKER_SHELL, price: 350 }
+      - { material: SHULKER_BOX, price: 800 }
+  - key: "ɴᴇᴛʜᴇʀ"
+    icon: NETHERRACK
+    coming-soon: false
+    items:
+      - { material: BLAZE_ROD, price: 150 }
+      - { material: NETHER_WART, price: 50 }
+      - { material: GLOWSTONE_DUST, price: 15 }
+      - { material: MAGMA_CREAM, price: 15 }
+      - { material: GHAST_TEAR, price: 15 }
+      - { material: QUARTZ, price: 15 }
+      - { material: SOUL_SAND, price: 50 }
+      - { material: MAGMA_BLOCK, price: 35 }
+      - { material: CRYING_OBSIDIAN, price: 150 }
+  - key: "ɢᴇᴀʀ"
+    icon: TOTEM_OF_UNDYING
+    coming-soon: false
+    items:
+      - { material: OBSIDIAN, price: 10 }
+      - { material: END_CRYSTAL, price: 250 }
+      - { material: RESPAWN_ANCHOR, price: 1000 }
+      - { material: GLOWSTONE, price: 500 }
+      - { material: TOTEM_OF_UNDYING, price: 1250 }
+      - { material: ENDER_PEARL, price: 75 }
+      - { material: GOLDEN_APPLE, price: 250 }
+      - { material: EXPERIENCE_BOTTLE, price: 500 }
+      - { material: ARROW, price: 250 }
+  - key: "ꜰᴏᴏᴅ"
+    icon: COOKED_BEEF
+    coming-soon: false
+    items:
+      - { material: POTATO, price: 75 }
+      - { material: SWEET_BERRIES, price: 50 }
+      - { material: MELON_SLICE, price: 10 }
+      - { material: CARROT, price: 65 }
+      - { material: APPLE, price: 25 }
+      - { material: COOKED_CHICKEN, price: 100 }
+      - { material: COOKED_BEEF, price: 200 }
+      - { material: GOLDEN_CARROT, price: 50 }
+      - { material: GOLDEN_APPLE, price: 250 }
+  - key: "ѕʜᴀʀᴅ ѕʜᴏᴘ"
+    icon: AMETHYST_SHARD
+    coming-soon: true
+    items: []
+  - key: "ʀᴇᴅѕᴛᴏɴᴇ"
+    icon: REDSTONE_BLOCK
+    coming-soon: false
+    items: []   # you add these yourself with /addshopitem ʀᴇᴅѕᴛᴏɴᴇ auto — "auto" always resolves to $650, exactly matching what you described
