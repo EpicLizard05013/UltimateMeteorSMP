@@ -38,8 +38,10 @@ tasks.withType<JavaCompile> {
 
 tasks.named<ShadowJar>("shadowJar") {
     archiveClassifier.set("all")
+    // HikariCP can be safely relocated
     relocate("com.zaxxer.hikari", "com.meteorsmp.libs.hikari")
-    relocate("org.sqlite", "com.meteorsmp.libs.sqlite")
+    
+    // DO NOT relocate org.sqlite — JNI native binaries depend on the un-relocated package path
     minimize {
         exclude(dependency("org.xerial:sqlite-jdbc:.*"))
     }
