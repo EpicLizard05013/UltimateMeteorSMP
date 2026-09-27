@@ -243,6 +243,10 @@ public class EconomyCommands implements CommandExecutor, Listener {
 
     private boolean handleSellMulti(CommandSender sender) {
         if (!(sender instanceof Player player)) { sender.sendMessage("Players only."); return true; }
+        if (!economy.isSellMultiEnabled()) {
+            player.sendMessage(ChatColor.RED + "[SellMulti] The sell multiplier system is currently disabled by an admin.");
+            return true;
+        }
         double multi = economy.getSellMultiplier(player.getUniqueId());
         player.sendMessage(ChatColor.LIGHT_PURPLE + "[SellMulti] " + ChatColor.WHITE + "Your current global sell multiplier is: " +
                 ChatColor.YELLOW + multi + "x");
