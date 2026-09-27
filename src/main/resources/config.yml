@@ -1,8 +1,104 @@
+# Any script or command name listed here is dynamically hidden and
+# ignored during both variable parsing and runtime execution.
 disabled-scripts:
   - small-test.sk
+  - fakestaish.sk
 
 database:
   file: storage.db
-  
+
+economy:
+  # Turn the whole category-multiplier sell bonus system on or off. When
+  # false, /sell always pays base price (no multiplier), and /sellmulti
+  # tells players it's currently disabled. Progress toward multipliers
+  # still tracks in the background either way, so turning it back on
+  # doesn't lose anyone's progress.
+  sellmulti-enabled: true
+
 shop:
+  # Every item's sell (worth) price is auto-derived from its shop buy
+  # price at (100 - this)%, and capped there even if worth_prices gets
+  # edited manually later. buy 500, margin 15 -> sell 425.
   sell-margin-percent: 15
+
+  # Category definitions. The map key (e.g. "armory") is just an internal
+  # config label — "display" is the actual in-game category name/text.
+  # coming-soon: true shows a message instead of opening the category.
+  categories:
+    armory:
+      display: "ᴀʀᴍᴏʀʏ"
+      icon: DIAMOND_SWORD
+      coming-soon: false
+    end:
+      display: "ᴇɴᴅ"
+      icon: END_STONE
+      coming-soon: false
+    nether:
+      display: "ɴᴇᴛʜᴇʀ"
+      icon: NETHERRACK
+      coming-soon: false
+    gear:
+      display: "ɢᴇᴀʀ"
+      icon: TOTEM_OF_UNDYING
+      coming-soon: false
+    food:
+      display: "ꜰᴏᴏᴅ"
+      icon: COOKED_BEEF
+      coming-soon: false
+    shard_shop:
+      display: "ѕʜᴀʀᴅ ѕʜᴏᴘ"
+      icon: AMETHYST_SHARD
+      coming-soon: true   # flip to false once you've added items below
+    redstone:
+      display: "ʀᴇᴅѕᴛᴏɴᴇ"
+      icon: REDSTONE_BLOCK
+      coming-soon: false
+
+  # Items per category, keyed by the SAME label used above under
+  # categories (armory / end / nether / gear / food / shard_shop /
+  # redstone), not the small-caps display text. "slot" is optional and
+  # only used the first time an item is created — see the note above.
+  items:
+    armory: []   # no starting price list was given for Armory — add via /addshopitem or here
+    end:
+      - { material: ENDER_CHEST, price: 2500 }
+      - { material: ENDER_PEARL, price: 75 }
+      - { material: END_STONE, price: 8 }
+      - { material: DRAGON_BREATH, price: 1000 }
+      - { material: END_ROD, price: 100 }
+      - { material: CHORUS_FRUIT, price: 100 }
+      - { material: POPPED_CHORUS_FRUIT, price: 150 }
+      - { material: SHULKER_SHELL, price: 350 }
+      - { material: SHULKER_BOX, price: 800 }
+    nether:
+      - { material: BLAZE_ROD, price: 150 }
+      - { material: NETHER_WART, price: 50 }
+      - { material: GLOWSTONE_DUST, price: 15 }
+      - { material: MAGMA_CREAM, price: 15 }
+      - { material: GHAST_TEAR, price: 15 }
+      - { material: QUARTZ, price: 15 }
+      - { material: SOUL_SAND, price: 50 }
+      - { material: MAGMA_BLOCK, price: 35 }
+      - { material: CRYING_OBSIDIAN, price: 150 }
+    gear:
+      - { material: OBSIDIAN, price: 10 }
+      - { material: END_CRYSTAL, price: 250 }
+      - { material: RESPAWN_ANCHOR, price: 1000 }
+      - { material: GLOWSTONE, price: 500 }
+      - { material: TOTEM_OF_UNDYING, price: 1250 }
+      - { material: ENDER_PEARL, price: 75 }
+      - { material: GOLDEN_APPLE, price: 250 }
+      - { material: EXPERIENCE_BOTTLE, price: 500 }
+      - { material: ARROW, price: 250 }
+    food:
+      - { material: POTATO, price: 75 }
+      - { material: SWEET_BERRIES, price: 50 }
+      - { material: MELON_SLICE, price: 10 }
+      - { material: CARROT, price: 65 }
+      - { material: APPLE, price: 25 }
+      - { material: COOKED_CHICKEN, price: 100 }
+      - { material: COOKED_BEEF, price: 200 }
+      - { material: GOLDEN_CARROT, price: 50 }
+      - { material: GOLDEN_APPLE, price: 250 }
+    shard_shop: []
+    redstone: []   # add with /addshopitem redstone auto per item — "auto" always resolves to $650
