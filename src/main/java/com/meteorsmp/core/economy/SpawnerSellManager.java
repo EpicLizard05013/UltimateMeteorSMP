@@ -32,6 +32,7 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
     private final PluginMain plugin;
     private final DatabaseManager db;
     private final Map<String, Double> worthPrices = new ConcurrentHashMap<>();
+    private final Map<String, Double> shopBuyPrices = new ConcurrentHashMap<>();
     private final Map<UUID, Double> balanceCache = new ConcurrentHashMap<>();
 
     public SpawnerSellManager(PluginMain plugin, DatabaseManager db) {
@@ -40,17 +41,57 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
     }
 
     public void loadWorthAndMultipliers() {
-        try (Connection c = db.getRawConnection();
-             PreparedStatement ps = c.prepareStatement("SELECT item_id, price FROM worth_prices");
-             ResultSet rs = ps.executeQuery()) {
-            worthPrices.clear();
-            while (rs.next()) {
-                worthPrices.put(rs.getString("item_id"), rs.getDouble("price"));
+        try (Connection c = db.getRawConnection()) {
+            try (PreparedStatement ps = c.prepareStatement("SELECT item_id, price FROM worth_prices");
+                 ResultSet rs = ps.executeQuery()) {
+                worthPrices.clear();
+                while (rs.next()) worthPrices.put(rs.getString("item_id"), rs.getDouble("price"));
             }
-            plugin.getLogger().info("Loaded " + worthPrices.size() + " worth prices.");
+            try (PreparedStatement ps = c.prepareStatement("SELECT item_id, buy_price FROM shop_buy_prices");
+                 ResultSet rs = ps.executeQuery()) {
+                shopBuyPrices.clear();
+                while (rs.next()) shopBuyPrices.put(rs.getString("item_id"), rs.getDouble("buy_price"));
+            }
+            plugin.getLogger().info("Loaded " + worthPrices.size() + " worth prices, " + shopBuyPrices.size() + " shop buy prices.");
         } catch (Exception e) {
-            plugin.getLogger().log(Level.SEVERE, "Failed to load worth_prices", e);
+            plugin.getLogger().log(Level.SEVERE, "Failed to load worth_prices/shop_buy_prices", e);
         }
+    }
+
+    private double sellMarginPercent() {
+        return plugin.getConfig().getDouble("shop.sell-margin-percent", 15.0);
+    }
+
+    /** NEW (not in original shop.sk/shopbal.sk): called whenever a shop buy price is set,
+     * so the sell price is always derived and capped below it. */
+    public void deriveWorthPriceFromShop(String itemId, double buyPrice) {
+        double margin = sellMarginPercent();
+        double sellPrice = Math.round(buyPrice * (1 - margin / 100.0) * 100.0) / 100.0;
+        try (Connection c = db.getRawConnection();
+             PreparedStatement ps = c.prepareStatement("""
+                 INSERT INTO worth_prices (item_id, price, category) VALUES (?, ?, ?)
+                 ON CONFLICT(item_id) DO UPDATE SET price = excluded.price
+                 """)) {
+            ps.setString(1, itemId);
+            ps.setDouble(2, sellPrice);
+            ps.setString(3, getSellCategory(itemId));
+            ps.executeUpdate();
+            worthPrices.put(itemId, sellPrice);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "deriveWorthPriceFromShop failed for " + itemId, e);
+        }
+    }
+
+    /** Defense in depth: even if worth_prices is manually edited or migrated with a bad
+     * value, the sell payout can never exceed (buy price * (1 - margin)) for an item that
+     * also exists in the shop. */
+    private double getClampedSellPrice(String itemId) {
+        Double raw = worthPrices.get(itemId);
+        if (raw == null) return -1;
+        Double buyPrice = shopBuyPrices.get(itemId);
+        if (buyPrice == null) return raw;
+        double cap = buyPrice * (1 - sellMarginPercent() / 100.0);
+        return Math.min(raw, cap);
     }
 
     public long getShards(UUID uuid) {
@@ -119,9 +160,7 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
 
     public double getSellMultiplier(UUID uuid) {
         double multi = 1.0;
-        for (String cat : CATEGORIES) {
-            multi += (getCategoryMultiplier(uuid, cat) - 1.0);
-        }
+        for (String cat : CATEGORIES) multi += (getCategoryMultiplier(uuid, cat) - 1.0);
         return multi;
     }
 
@@ -195,8 +234,8 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
                     boolean soldAnySub = false;
                     for (ItemStack sub : subItems) {
                         String subId = cleanTypeId(sub);
-                        Double unitPrice = worthPrices.get(subId);
-                        if (unitPrice == null) {
+                        double unitPrice = getClampedSellPrice(subId);
+                        if (unitPrice < 0) {
                             player.getInventory().addItem(sub);
                             returnedAny = true;
                             continue;
@@ -216,10 +255,10 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
                         returnedAny = true;
                     }
                 } else {
-                    Double shulkerPrice = worthPrices.get(id);
-                    if (shulkerPrice == null) shulkerPrice = worthPrices.get("shulker_box");
+                    double shulkerPrice = getClampedSellPrice(id);
+                    if (shulkerPrice < 0) shulkerPrice = getClampedSellPrice("shulker_box");
 
-                    if (shulkerPrice != null) {
+                    if (shulkerPrice >= 0) {
                         double payout = shulkerPrice * item.getAmount();
                         earnings += payout;
                         itemsSold += item.getAmount();
@@ -234,8 +273,8 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
                 continue;
             }
 
-            Double unitPrice = worthPrices.get(id);
-            if (unitPrice == null) {
+            double unitPrice = getClampedSellPrice(id);
+            if (unitPrice < 0) {
                 player.getInventory().addItem(item);
                 returnedAny = true;
                 continue;
@@ -285,8 +324,6 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
         return (Math.floor(d * 10) / 10) == Math.floor(d) ? String.valueOf((long) d) : String.valueOf(Math.floor(d * 10) / 10);
     }
 
-    private final Set<UUID> autoSellEnabled = ConcurrentHashMap.newKeySet();
-
     public void tryHookSmartSpawner() {
         if (Bukkit.getPluginManager().getPlugin("SmartSpawner") == null) {
             plugin.getLogger().info("SmartSpawner not found — spawner auto-sell disabled.");
@@ -294,7 +331,7 @@ public class SpawnerSellManager implements net.milkbowl.vault.economy.Economy, L
         }
         final String candidateEventClass = "github.nighter.smartspawner.api.events.SpawnerSellEvent";
         try {
-            Class<?> eventClass = Class.forName(candidateEventClass);
+            Class.forName(candidateEventClass);
             plugin.getLogger().info("Found candidate SmartSpawner event class: " + candidateEventClass +
                     " — reflective handler wiring is still a stub, not implemented yet.");
         } catch (ClassNotFoundException e) {
