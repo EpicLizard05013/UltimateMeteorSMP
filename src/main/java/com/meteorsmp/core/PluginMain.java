@@ -46,7 +46,25 @@ public final class PluginMain extends JavaPlugin {
             return;
         }
 
-        // 2. Variable Importer Command
+        // 2. Main Plugin Command (/ultimatemeteorsmp reload)
+        PluginCommand mainCmd = getCommand("ultimatemeteorsmp");
+        if (mainCmd != null) {
+            mainCmd.setExecutor((sender, command, label, args) -> {
+                if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
+                    if (!sender.hasPermission("meteorsmp.admin")) {
+                        sender.sendMessage("§cYou don't have permission to run this.");
+                        return true;
+                    }
+                    reloadPluginConfig();
+                    sender.sendMessage("§a[UltimateMeteorSMP] Configuration, shops, and worth values reloaded successfully!");
+                    return true;
+                }
+                sender.sendMessage("§eUltimateMeteorSMP Core v1.0.0 | Usage: /" + label + " reload");
+                return true;
+            });
+        }
+
+        // 3. Skript Variable Importer Command
         PluginCommand migrateCmd = getCommand("migratevariables");
         if (migrateCmd != null) {
             migrateCmd.setExecutor((sender, command, label, args) -> {
@@ -59,28 +77,32 @@ public final class PluginMain extends JavaPlugin {
             });
         }
 
-        // 3. Economy & Spawner Sell Setup
+        // 4. Economy & Spawner / Worth Manager Setup
         this.spawnerSellManager = new SpawnerSellManager(this, databaseManager);
         spawnerSellManager.loadWorthAndMultipliers();
         getServer().getServicesManager().register(
                 Economy.class, spawnerSellManager, this, ServicePriority.Highest);
 
-        PluginCommand sellCmd = getCommand("sell");
-        if (sellCmd != null) {
-            sellCmd.setExecutor((sender, command, label, args) -> {
-                if (!(sender instanceof Player player)) {
-                    sender.sendMessage("Players only.");
-                    return true;
-                }
-                spawnerSellManager.openSellGui(player);
+        // Register Sell & Worth Commands
+        registerCommand("sell", (sender, command, label, args) -> {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage("Players only.");
                 return true;
-            });
-        }
+            }
+            spawnerSellManager.openSellGui(player);
+            return true;
+        });
+
+        registerCommand("worth", spawnerSellManager);
+        registerCommand("worthchange", spawnerSellManager);
+        registerCommand("fixlore", spawnerSellManager);
+        registerCommand("setdefaultworth", spawnerSellManager);
+        registerCommand("fixworth", spawnerSellManager);
 
         getServer().getPluginManager().registerEvents(spawnerSellManager, this);
         spawnerSellManager.tryHookSmartSpawner();
 
-        // 4. Shop System
+        // 5. Shop System
         this.shopManager = new ShopManager(this, databaseManager, spawnerSellManager);
         shopManager.loadAll();
         shopManager.applyConfigShop();
@@ -98,7 +120,7 @@ public final class PluginMain extends JavaPlugin {
         registerCommand("clearshopcat", (s, c, l, a) -> { if (s instanceof Player p && a.length > 0) shopManager.clearCategory(p, a[0]); return true; });
         registerCommand("shoplist", (s, c, l, a) -> { if (s instanceof Player p) shopManager.showAdminHelp(p); return true; });
 
-        // 5. Economy Commands
+        // 6. Economy Commands
         this.economyCommands = new EconomyCommands(this, databaseManager, spawnerSellManager);
         getServer().getPluginManager().registerEvents(economyCommands, this);
         for (String cmd : List.of("bal", "pay", "add-to-balance", "changebal", "changebalall", "confirm",
@@ -106,7 +128,7 @@ public final class PluginMain extends JavaPlugin {
             registerCommand(cmd, economyCommands);
         }
 
-        // 6. Moderation & Staff Ranks
+        // 7. Moderation & Staff Ranks
         this.rankService = new StaffRankService(databaseManager, getLogger());
         this.staffModeration = new StaffModerationManager(this, databaseManager, rankService);
         getServer().getPluginManager().registerEvents(staffModeration, this);
@@ -116,6 +138,18 @@ public final class PluginMain extends JavaPlugin {
         }
 
         getLogger().info("UltimateMeteorSMP enabled cleanly. Blacklisted scripts/commands: " + blacklist.size());
+    }
+
+    public void reloadPluginConfig() {
+        reloadConfig();
+        loadBlacklist();
+        if (spawnerSellManager != null) {
+            spawnerSellManager.loadWorthAndMultipliers();
+        }
+        if (shopManager != null) {
+            shopManager.loadAll();
+            shopManager.applyConfigShop();
+        }
     }
 
     @Override
@@ -128,6 +162,7 @@ public final class PluginMain extends JavaPlugin {
     private void loadBlacklist() {
         FileConfiguration cfg = getConfig();
         List<String> configured = cfg.getStringList("disabled-scripts");
+        blacklist.clear();
         blacklist.addAll(configured);
     }
 
