@@ -83,7 +83,7 @@ public final class PluginMain extends JavaPlugin {
         // 4. Shop System
         this.shopManager = new ShopManager(this, databaseManager, spawnerSellManager);
         shopManager.loadAll();
-        shopManager.seedDefaultsIfEmpty();
+        shopManager.applyConfigShop();
         getServer().getPluginManager().registerEvents(shopManager, this);
 
         registerCommand("shop", (s, c, l, a) -> { if (s instanceof Player p) shopManager.openMainShop(p); return true; });
