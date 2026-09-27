@@ -5,18 +5,15 @@ import com.meteorsmp.core.database.DatabaseManager;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -24,24 +21,13 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
-/**
- * Port of shop.sk's player-facing purchase flow, category system (using
- * the same small-caps unicode category names as the original), and the
- * admin setup commands. Category "names" are literally the display text
- * (matching how shop.sk stores them) — findCategory() normalizes small
- * caps back to plain ascii for matching, exactly like shopFindCategory().
- *
- * NEW vs the original (explicitly requested, not in shop.sk): categories
- * can be flagged coming-soon (blocks opening, shows a message instead),
- * and every buy price now automatically derives a capped sell price via
- * SpawnerSellManager so an item can never be resold for more than it
- * cost — see addItem() and SpawnerSellManager's sell-price clamp.
- */
 public class ShopManager implements Listener {
 
     private static final String MAIN_TITLE = "§8§rѕʜᴏᴘ";
     private static final String CAT_PREFIX = "§8§rѕʜᴏᴘ - ";
     private static final String CONFIRM_PREFIX = "Buying ";
+    private static final String CAT_LAYOUT_TITLE = "§8ʟᴀʏᴏᴜᴛ: ѕʜᴏᴘ";
+    private static final String ITEM_LAYOUT_PREFIX = "§8ʟᴀʏᴏᴜᴛ: ";
 
     private final PluginMain plugin;
     private final DatabaseManager db;
@@ -53,6 +39,8 @@ public class ShopManager implements Listener {
     private final Map<UUID, String> viewingCategory = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> itemPage = new ConcurrentHashMap<>();
     private final Map<UUID, ConfirmState> confirming = new ConcurrentHashMap<>();
+    private final Map<UUID, String> layoutViewingCategory = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> layoutPage = new ConcurrentHashMap<>();
 
     public ShopManager(PluginMain plugin, DatabaseManager db, SpawnerSellManager economy) {
         this.plugin = plugin;
@@ -102,7 +90,7 @@ public class ShopManager implements Listener {
     }
 
     // ------------------------------------------------------------------
-    // Loading + seeding
+    // Loading + config sync
     // ------------------------------------------------------------------
 
     public void loadAll() {
@@ -139,54 +127,69 @@ public class ShopManager implements Listener {
                 itemsByCategory.values().stream().mapToInt(Map::size).sum() + " items.");
     }
 
-    /** Seeds shop-defaults.yml, but only when no categories exist yet — never overwrites. */
-    public void seedDefaultsIfEmpty() {
-        if (!categories.isEmpty()) return;
-
-        InputStream in = plugin.getResource("shop-defaults.yml");
-        if (in == null) {
-            plugin.getLogger().warning("shop-defaults.yml not found in jar resources — skipping shop seed.");
+    /** Runs every boot (not just when empty). config.yml controls category
+     * icon/coming-soon and item price always; slot is only taken from
+     * config for a brand-new item — an existing item's slot (set via the
+     * drag-and-drop layout editors) is never overwritten by config sync. */
+    public void applyConfigShop() {
+        var catSection = plugin.getConfig().getConfigurationSection("shop.categories");
+        if (catSection == null) {
+            plugin.getLogger().warning("No shop.categories section in config.yml — skipping shop config sync.");
             return;
         }
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(new InputStreamReader(in, StandardCharsets.UTF_8));
-        List<Map<?, ?>> catList = yaml.getMapList("categories");
-        int seededCats = 0, seededItems = 0;
 
-        for (Map<?, ?> catMap : catList) {
-            String key = String.valueOf(catMap.get("key"));
-            String iconName = String.valueOf(catMap.get("icon"));
-            boolean comingSoon = Boolean.TRUE.equals(catMap.get("coming-soon"));
+        int syncedCats = 0, syncedItems = 0;
+        for (String key : catSection.getKeys(false)) {
+            String display = plugin.getConfig().getString("shop.categories." + key + ".display", key);
+            String iconName = plugin.getConfig().getString("shop.categories." + key + ".icon", "CHEST");
+            boolean comingSoon = plugin.getConfig().getBoolean("shop.categories." + key + ".coming-soon", false);
             Material iconMat;
             try { iconMat = Material.valueOf(iconName); } catch (IllegalArgumentException e) { iconMat = Material.CHEST; }
 
+            ShopCategory existingCat = categories.get(display);
+            Integer keepSlot = existingCat != null ? existingCat.catSlot() : null;
             ItemStack icon = new ItemStack(iconMat);
-            categories.put(key, new ShopCategory(icon, true, null, comingSoon));
-            persistCategory(key, icon, true, null, comingSoon);
-            seededCats++;
+            categories.put(display, new ShopCategory(icon, true, keepSlot, comingSoon));
+            persistCategory(display, icon, true, keepSlot, comingSoon);
+            syncedCats++;
 
-            Object itemsObj = catMap.get("items");
-            if (itemsObj instanceof List<?> itemList) {
-                int index = 1;
-                for (Object itemObj : itemList) {
-                    if (!(itemObj instanceof Map<?, ?> itemDef)) continue;
-                    String matName = String.valueOf(itemDef.get("material"));
-                    double price = itemDef.get("price") instanceof Number n ? n.doubleValue() : 0;
-                    Material mat;
-                    try { mat = Material.valueOf(matName); } catch (IllegalArgumentException e) {
-                        plugin.getLogger().warning("shop-defaults.yml: unknown material " + matName + " in category " + key);
-                        continue;
-                    }
-                    ItemStack stack = new ItemStack(mat, 1);
-                    itemsByCategory.computeIfAbsent(key, k -> new TreeMap<>())
-                            .put(index, new ShopItem(stack, price, "money", null));
-                    persistItem(key, index, stack, price, "money", null);
-                    linkBuyPriceToSell(mat.getKey().getKey().toLowerCase(Locale.ROOT), price, "money");
-                    index++;
-                    seededItems++;
+            List<Map<?, ?>> itemDefs = plugin.getConfig().getMapList("shop.items." + key);
+            Map<Integer, ShopItem> items = itemsByCategory.computeIfAbsent(display, k -> new TreeMap<>());
+
+            for (Map<?, ?> def : itemDefs) {
+                Object matObj = def.get("material");
+                if (matObj == null) continue;
+                String matName = String.valueOf(matObj);
+                double price = def.get("price") instanceof Number n ? n.doubleValue() : 0;
+                String currency = def.get("currency") != null ? String.valueOf(def.get("currency")) : "money";
+                Integer configSlot = def.get("slot") instanceof Number n ? n.intValue() : null;
+
+                Material mat;
+                try { mat = Material.valueOf(matName); } catch (IllegalArgumentException e) {
+                    plugin.getLogger().warning("config.yml: unknown material '" + matName + "' under shop.items." + key);
+                    continue;
                 }
+
+                Integer foundIdx = null;
+                for (Map.Entry<Integer, ShopItem> e : items.entrySet()) {
+                    if (e.getValue().item().getType() == mat) { foundIdx = e.getKey(); break; }
+                }
+
+                if (foundIdx != null) {
+                    ShopItem old = items.get(foundIdx);
+                    items.put(foundIdx, new ShopItem(old.item(), price, currency, old.slot()));
+                    persistItem(display, foundIdx, old.item(), price, currency, old.slot());
+                } else {
+                    int idx = items.keySet().stream().mapToInt(Integer::intValue).max().orElse(0) + 1;
+                    ItemStack stack = new ItemStack(mat, 1);
+                    items.put(idx, new ShopItem(stack, price, currency, configSlot));
+                    persistItem(display, idx, stack, price, currency, configSlot);
+                }
+                economy.deriveWorthPriceFromShop(mat.getKey().getKey().toLowerCase(Locale.ROOT), price);
+                syncedItems++;
             }
         }
-        plugin.getLogger().info("Seeded default shop: " + seededCats + " categories, " + seededItems + " items.");
+        plugin.getLogger().info("Synced shop from config.yml: " + syncedCats + " categories, " + syncedItems + " items checked.");
     }
 
     // ------------------------------------------------------------------
@@ -255,7 +258,6 @@ public class ShopManager implements Listener {
         double price;
         String currency;
         if (priceArg == null || priceArg.equalsIgnoreCase("auto")) {
-            // Faithful to shop.sk: base $395 + $250 fee, rounded to nearest $50 = always $650.
             double basePrice = 395;
             double rawCalc = basePrice + 250;
             price = Math.round(rawCalc / 50.0) * 50;
@@ -289,10 +291,8 @@ public class ShopManager implements Listener {
                 formatNumber(price) + " (" + currency + ")!");
     }
 
-    /** NEW safety feature (not in the original script): every buy price automatically
-     * derives a capped sell price so an item can never be resold above cost. */
     private void linkBuyPriceToSell(String itemId, double buyPrice, String currency) {
-        if (!"money".equals(currency)) return; // shards aren't comparable to $ worth prices
+        if (!"money".equals(currency)) return;
         try (Connection c = db.getRawConnection();
              PreparedStatement ps = c.prepareStatement("""
                  INSERT INTO shop_buy_prices (item_id, buy_price, currency) VALUES (?, ?, ?)
@@ -317,6 +317,8 @@ public class ShopManager implements Listener {
         p.sendMessage(ChatColor.RED + "/clearshopcat <name> " + ChatColor.GRAY + "- Remove all items from a category");
         p.sendMessage(ChatColor.RED + "/addshopitem <cat> [price|auto] [money|shards] " + ChatColor.GRAY +
                 "- Add held item (omitting price auto-calculates to $650)");
+        p.sendMessage(ChatColor.RED + "/editcatlayout " + ChatColor.GRAY + "- Drag to reorder categories");
+        p.sendMessage(ChatColor.RED + "/edititemlayout <cat> " + ChatColor.GRAY + "- Drag to reorder items in a category");
         p.sendMessage(ChatColor.DARK_GRAY + "" + ChatColor.STRIKETHROUGH + "----------------------------------------");
     }
 
@@ -354,6 +356,29 @@ public class ShopManager implements Listener {
             ps.executeUpdate();
         } catch (Exception e) {
             plugin.getLogger().log(Level.WARNING, "persistItem failed", e);
+        }
+    }
+
+    private void persistCategorySlot(String cat, Integer slot) {
+        try (Connection c = db.getRawConnection();
+             PreparedStatement ps = c.prepareStatement("UPDATE shop_categories SET cat_slot = ? WHERE name = ?")) {
+            if (slot != null) ps.setInt(1, slot); else ps.setNull(1, java.sql.Types.INTEGER);
+            ps.setString(2, cat);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "persistCategorySlot failed", e);
+        }
+    }
+
+    private void persistItemSlot(String cat, int idx, Integer slot) {
+        try (Connection c = db.getRawConnection();
+             PreparedStatement ps = c.prepareStatement("UPDATE shop_items SET slot = ? WHERE category = ? AND idx = ?")) {
+            if (slot != null) ps.setInt(1, slot); else ps.setNull(1, java.sql.Types.INTEGER);
+            ps.setString(2, cat);
+            ps.setInt(3, idx);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "persistItemSlot failed", e);
         }
     }
 
@@ -517,6 +542,22 @@ public class ShopManager implements Listener {
         return pane;
     }
 
+    private ItemStack grayPane() {
+        ItemStack pane = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
+        ItemMeta m = pane.getItemMeta();
+        m.setDisplayName("§7");
+        pane.setItemMeta(m);
+        return pane;
+    }
+
+    private int firstFreeSlot(Inventory gui) {
+        for (int i = 0; i < 27; i++) {
+            ItemStack it = gui.getItem(i);
+            if (it != null && it.getType() == Material.GRAY_STAINED_GLASS_PANE) return i;
+        }
+        return 0;
+    }
+
     private ItemStack buildShopDisplayItem(ShopItem si, int index) {
         ItemStack display = si.item().clone();
         ItemMeta meta = display.getItemMeta();
@@ -645,6 +686,42 @@ public class ShopManager implements Listener {
         String title = event.getView().getTitle();
         UUID uuid = player.getUniqueId();
 
+        if (title.equals(CAT_LAYOUT_TITLE)) {
+            return; // deliberately not cancelled — dragging icons around is how reordering works
+        }
+
+        if (title.startsWith(ITEM_LAYOUT_PREFIX)) {
+            int slot = event.getRawSlot();
+            String cat = layoutViewingCategory.get(uuid);
+            int page = layoutPage.getOrDefault(uuid, 1);
+            if (slot == 18) {
+                event.setCancelled(true);
+                if (page == 1) {
+                    player.closeInventory();
+                } else {
+                    saveLayoutPage(cat, page, event.getInventory());
+                    layoutPage.put(uuid, page - 1);
+                    int maxItems = itemsByCategory.getOrDefault(cat, Map.of()).size();
+                    int maxPage = Math.max(1, (int) Math.ceil(maxItems / 9.0));
+                    Inventory gui = Bukkit.createInventory(null, 27, ITEM_LAYOUT_PREFIX + cat + " (pg. " + (page - 1) + "/" + maxPage + ")");
+                    player.openInventory(gui);
+                    refreshChangeLocGui(player);
+                }
+            } else if (slot == 26) {
+                event.setCancelled(true);
+                int maxItems = itemsByCategory.getOrDefault(cat, Map.of()).size();
+                int maxPage = Math.max(1, (int) Math.ceil(maxItems / 9.0));
+                if (page < maxPage) {
+                    saveLayoutPage(cat, page, event.getInventory());
+                    layoutPage.put(uuid, page + 1);
+                    Inventory gui = Bukkit.createInventory(null, 27, ITEM_LAYOUT_PREFIX + cat + " (pg. " + (page + 1) + "/" + maxPage + ")");
+                    player.openInventory(gui);
+                    refreshChangeLocGui(player);
+                }
+            }
+            return;
+        }
+
         if (title.equals(MAIN_TITLE)) {
             event.setCancelled(true);
             ItemStack clicked = event.getCurrentItem();
@@ -756,7 +833,8 @@ public class ShopManager implements Listener {
             leftover.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
             player.sendMessage(ChatColor.RED + "[Shop] Your inventory was full, so your items were dropped at your feet!");
         }
-    
+        // Deliberately NOT closing the inventory and NOT clearing confirming state here —
+        // matches the original: the confirm GUI stays open so you can click Confirm again.
     }
 
     private String extractTag(ItemStack item, String tag) {
@@ -766,5 +844,139 @@ public class ShopManager implements Listener {
             if (stripped.contains(tag)) return stripped.replace(tag, "");
         }
         return null;
+    }
+
+    // ------------------------------------------------------------------
+    // Layout editors: /editcatlayout, /edititemlayout
+    // ------------------------------------------------------------------
+
+    public void editCategoryLayout(Player admin) {
+        Inventory gui = Bukkit.createInventory(null, 27, CAT_LAYOUT_TITLE);
+        for (int i = 0; i < 27; i++) gui.setItem(i, grayPane());
+        for (Map.Entry<String, ShopCategory> e : categories.entrySet()) {
+            String cat = e.getKey();
+            ShopCategory sc = e.getValue();
+            ItemStack icon = sc.icon().clone();
+            ItemMeta meta = icon.getItemMeta();
+            meta.setDisplayName(getCategoryColor(cat) + ChatColor.BOLD + cat);
+            meta.setLore(List.of(ChatColor.GRAY + "Drag to reorder!", ChatColor.BLACK + "CATNAME:" + cat));
+            icon.setItemMeta(meta);
+            int slot = (sc.catSlot() != null && sc.catSlot() >= 0 && sc.catSlot() <= 26) ? sc.catSlot() : firstFreeSlot(gui);
+            gui.setItem(slot, icon);
+        }
+        admin.openInventory(gui);
+    }
+
+    public void editItemLayout(Player admin, String catArg) {
+        String cat = findCategory(catArg);
+        if (cat == null) {
+            admin.sendMessage(ChatColor.RED + "[Shop] Error: category '" + catArg + "' was not found!");
+            return;
+        }
+        layoutViewingCategory.put(admin.getUniqueId(), cat);
+        layoutPage.put(admin.getUniqueId(), 1);
+        int maxItems = itemsByCategory.getOrDefault(cat, Map.of()).size();
+        int maxPage = Math.max(1, (int) Math.ceil(maxItems / 9.0));
+        Inventory gui = Bukkit.createInventory(null, 27, ITEM_LAYOUT_PREFIX + cat + " (pg. 1/" + maxPage + ")");
+        admin.openInventory(gui);
+        refreshChangeLocGui(admin);
+    }
+
+    private void refreshChangeLocGui(Player admin) {
+        UUID uuid = admin.getUniqueId();
+        String cat = layoutViewingCategory.get(uuid);
+        if (cat == null) return;
+        int page = layoutPage.getOrDefault(uuid, 1);
+        Inventory inv = admin.getOpenInventory().getTopInventory();
+        for (int i = 0; i < 27; i++) inv.setItem(i, grayPane());
+
+        Map<Integer, ShopItem> items = itemsByCategory.getOrDefault(cat, Map.of());
+        int maxPage = Math.max(1, (int) Math.ceil(items.size() / 9.0));
+
+        if (page > 1) {
+            inv.setItem(18, navPane(Material.RED_STAINED_GLASS_PANE, ChatColor.RED + "" + ChatColor.BOLD + "Previous Page", "Click to go back"));
+        } else {
+            ItemStack barrier = new ItemStack(Material.BARRIER);
+            ItemMeta bm = barrier.getItemMeta();
+            bm.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + "Close (saves)");
+            barrier.setItemMeta(bm);
+            inv.setItem(18, barrier);
+        }
+        if (page < maxPage) {
+            inv.setItem(26, navPane(Material.GREEN_STAINED_GLASS_PANE, ChatColor.GREEN + "" + ChatColor.BOLD + "Next Page", "Click to advance"));
+        }
+
+        for (Map.Entry<Integer, ShopItem> e : items.entrySet()) {
+            int index = e.getKey();
+            ShopItem si = e.getValue();
+            int absSlot = (si.slot() != null) ? si.slot() : (index - 1);
+            int itemPageNum = (absSlot / 9) + 1;
+            if (itemPageNum != page) continue;
+            int slotInRow = absSlot - ((itemPageNum - 1) * 9);
+            int chestSlot = slotInRow + 9;
+            if (chestSlot < 9 || chestSlot > 26) continue;
+
+            ItemStack display = si.item().clone();
+            ItemMeta meta = display.getItemMeta();
+            meta.setLore(List.of(ChatColor.GRAY + "Drag to move", ChatColor.BLACK + "SHOPINDEX:" + index));
+            display.setItemMeta(meta);
+            inv.setItem(chestSlot, display);
+        }
+    }
+
+    private void saveLayoutPage(String cat, int page, Inventory inv) {
+        int startAbs = (page - 1) * 9;
+        Map<Integer, ShopItem> items = itemsByCategory.getOrDefault(cat, Map.of());
+        for (int rawSlot = 9; rawSlot <= 17; rawSlot++) {
+            ItemStack item = inv.getItem(rawSlot);
+            int absSlot = startAbs + (rawSlot - 9);
+            if (item != null && item.getType() != Material.AIR) {
+                String idxTag = extractTag(item, "SHOPINDEX:");
+                if (idxTag != null) {
+                    try {
+                        int idx = Integer.parseInt(idxTag);
+                        ShopItem old = items.get(idx);
+                        if (old != null) {
+                            items.put(idx, new ShopItem(old.item(), old.price(), old.currency(), absSlot));
+                            persistItemSlot(cat, idx, absSlot);
+                        }
+                    } catch (NumberFormatException ignored) {}
+                }
+            } else {
+                for (Map.Entry<Integer, ShopItem> e : items.entrySet()) {
+                    Integer s = e.getValue().slot();
+                    if (s != null && s == absSlot) {
+                        items.put(e.getKey(), new ShopItem(e.getValue().item(), e.getValue().price(), e.getValue().currency(), null));
+                        persistItemSlot(cat, e.getKey(), null);
+                    }
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    public void onLayoutClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) return;
+        String title = event.getView().getTitle();
+
+        if (title.equals(CAT_LAYOUT_TITLE)) {
+            Inventory inv = event.getInventory();
+            for (int slot = 0; slot < 27; slot++) {
+                String cat = extractTag(inv.getItem(slot), "CATNAME:");
+                if (cat != null) {
+                    ShopCategory old = categories.get(cat);
+                    categories.put(cat, new ShopCategory(old.icon(), old.pagination(), slot, old.comingSoon()));
+                    persistCategorySlot(cat, slot);
+                }
+            }
+            player.sendMessage(ChatColor.GREEN + "[Shop] Category layout saved successfully!");
+        } else if (title.startsWith(ITEM_LAYOUT_PREFIX) && !title.equals(CAT_LAYOUT_TITLE)) {
+            String cat = layoutViewingCategory.get(player.getUniqueId());
+            int page = layoutPage.getOrDefault(player.getUniqueId(), 1);
+            if (cat != null) {
+                saveLayoutPage(cat, page, event.getInventory());
+                player.sendMessage(ChatColor.GREEN + "[Shop] Layout saved successfully!");
+            }
+        }
     }
 }
