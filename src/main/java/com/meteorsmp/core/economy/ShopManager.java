@@ -756,8 +756,7 @@ public class ShopManager implements Listener {
             leftover.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
             player.sendMessage(ChatColor.RED + "[Shop] Your inventory was full, so your items were dropped at your feet!");
         }
-        confirming.remove(player.getUniqueId());
-        player.closeInventory();
+    
     }
 
     private String extractTag(ItemStack item, String tag) {
